@@ -23,10 +23,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Preparar Android SDK
-        uses: android-actions/setup-android@v3
       - name: Instalar paquetes Android
-        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - name: Compilar APK
         run: gradle assembleDebug
       - name: Publicar APK
