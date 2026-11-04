@@ -1,6 +1,6 @@
 package app.deva.draw
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Bundle
@@ -14,7 +14,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private lateinit var preview: ImageView
     private lateinit var status: TextView
 
