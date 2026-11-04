@@ -2,6 +2,7 @@ package app.deva.draw
 
 import androidx.activity.ComponentActivity
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.provider.Settings
@@ -13,10 +14,15 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : ComponentActivity() {
     private lateinit var preview: ImageView
     private lateinit var status: TextView
+
+    private val savedImageFile: File
+        get() = File(filesDir, "deva_source.jpg")
 
     private val pickImage = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.GetContent()
@@ -26,11 +32,10 @@ class MainActivity : ComponentActivity() {
                 contentResolver.openInputStream(uri)?.use { stream ->
                     val bitmap = BitmapFactory.decodeStream(stream)
                     if (bitmap != null) {
-                        val processed = ImageProcessor.process(bitmap)
-                        DrawData.preview = processed.first
-                        DrawData.strokes = processed.second
-                        preview.setImageBitmap(processed.first)
-                        status.text = "Imagen preparada: " + processed.second.size + " trazos. Activa el servicio y abre Gartic Phone."
+                        persistSourceImage(bitmap)
+                        prepareImage(bitmap)
+                    } else {
+                        status.text = "No se pudo leer esa imagen."
                     }
                 }
             } catch (e: Exception) {
@@ -91,12 +96,12 @@ class MainActivity : ComponentActivity() {
         content.addView(makeButton("3. Cómo dibujar en Gartic") {
             Toast.makeText(
                 this,
-                "Abre Gartic Phone, entra al lienzo y pulsa el botón flotante DEVA ▶. Mantén visible el lienzo.",
+                "Abre Gartic Phone en tu navegador, entra al lienzo y pulsa Iniciar en el panel DEVA. Arrastra el panel desde su título.",
                 Toast.LENGTH_LONG
             ).show()
         })
         content.addView(TextView(this).apply {
-            text = "Aviso: esta versión inicial usa un área aproximada de pantalla. Puede requerir ajustes según el tamaño y la posición del lienzo."
+            text = "La imagen seleccionada se conserva aunque cierres DEVA. En Gartic, inicia solo cuando tengas el lienzo visible. El área de dibujo todavía es aproximada."
             textSize = 12f
             setTextColor(0xFF9AA4B8.toInt())
             setPadding(0, 18, 0, 12)
@@ -104,6 +109,32 @@ class MainActivity : ComponentActivity() {
         root.addView(content)
         scroll.addView(root)
         setContentView(scroll)
+        restoreSavedImage()
+    }
+
+    private fun persistSourceImage(bitmap: Bitmap) {
+        FileOutputStream(savedImageFile).use { output ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output)
+            output.flush()
+        }
+    }
+
+    private fun prepareImage(bitmap: Bitmap) {
+        val processed = ImageProcessor.process(bitmap)
+        DrawData.preview = processed.first
+        DrawData.strokes = processed.second
+        preview.setImageBitmap(processed.first)
+        status.text = "Imagen guardada y preparada: " + processed.second.size + " trazos."
+    }
+
+    private fun restoreSavedImage() {
+        if (!savedImageFile.exists()) return
+        try {
+            val bitmap = BitmapFactory.decodeFile(savedImageFile.absolutePath) ?: return
+            prepareImage(bitmap)
+        } catch (e: Exception) {
+            status.text = "No se pudo restaurar la imagen guardada."
+        }
     }
 
     private fun makeButton(label: String, action: () -> Unit): Button {
