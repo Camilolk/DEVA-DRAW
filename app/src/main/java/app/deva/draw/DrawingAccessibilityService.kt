@@ -7,6 +7,8 @@ import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -19,6 +21,7 @@ import java.util.ArrayDeque
 class DrawingAccessibilityService : AccessibilityService() {
     private var windowManager: WindowManager? = null
     private var controlPanel: LinearLayout? = null
+    private var panelParams: WindowManager.LayoutParams? = null
     private var statusLabel: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
     private var nextStroke = 0
@@ -32,13 +35,16 @@ class DrawingAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!drawing || event == null) return
-        if (event.packageName?.toString() == packageName) return
+        val eventPackage = event.packageName?.toString() ?: return
+        if (isIgnoredPackage(eventPackage)) return
 
-        val detectedPackage = findGarticPackage()
-        val changedApp = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.packageName?.toString() != targetPackage
-        if (detectedPackage == null || changedApp) {
-            stopDrawing("DEVA se detuvo: saliste de Gartic Phone.")
+        // La página de Gartic suele estar dentro de Chrome/Firefox y no siempre
+        // expone su título al árbol de accesibilidad. La sesión se inicia
+        // manualmente desde el panel y se vigila que no cambie la app.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            eventPackage != targetPackage
+        ) {
+            stopDrawing("DEVA se detuvo porque cambiaste de aplicación.")
         }
     }
 
@@ -61,13 +67,14 @@ class DrawingAccessibilityService : AccessibilityService() {
             setBackgroundColor(0xEE18202E.toInt())
         }
         val title = TextView(this).apply {
-            text = "DEVA DRAW"
+            text = "DEVA DRAW  ⋮⋮"
             textSize = 13f
             setTextColor(0xFFFFFFFF.toInt())
             gravity = Gravity.CENTER
+            setPadding(8, 8, 8, 8)
         }
         statusLabel = TextView(this).apply {
-            text = "Esperando Gartic Phone"
+            text = "Abre Gartic y entra al lienzo"
             textSize = 10f
             setTextColor(0xFFD5DCEC.toInt())
             gravity = Gravity.CENTER
@@ -100,13 +107,39 @@ class DrawingAccessibilityService : AccessibilityService() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
+            gravity = Gravity.TOP or Gravity.START
             x = 12
             y = 150
         }
+        title.setOnTouchListener(object : View.OnTouchListener {
+            private var startX = 0
+            private var startY = 0
+            private var touchX = 0f
+            private var touchY = 0f
+
+            override fun onTouch(view: View, event: MotionEvent): Boolean {
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = params.x
+                        startY = params.y
+                        touchX = event.rawX
+                        touchY = event.rawY
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        params.x = startX + (event.rawX - touchX).toInt()
+                        params.y = startY + (event.rawY - touchY).toInt()
+                        try { windowManager?.updateViewLayout(panel, params) } catch (_: Exception) { }
+                        return true
+                    }
+                }
+                return event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL
+            }
+        })
         try {
             windowManager?.addView(panel, params)
             controlPanel = panel
+            panelParams = params
         } catch (_: Exception) {
             Toast.makeText(this, "No se pudo mostrar el control de DEVA.", Toast.LENGTH_LONG).show()
         }
@@ -117,39 +150,30 @@ class DrawingAccessibilityService : AccessibilityService() {
             controlPanel?.let { windowManager?.removeView(it) }
         } catch (_: Exception) { }
         controlPanel = null
+        panelParams = null
     }
 
-    private fun findGarticPackage(): String? {
+    private fun isIgnoredPackage(value: String): Boolean {
+        return value == packageName ||
+            value == "com.android.systemui" ||
+            value == "com.android.settings" ||
+            value.contains("inputmethod", ignoreCase = true) ||
+            value.contains("keyboard", ignoreCase = true)
+    }
+
+    private fun findForegroundPackage(): String? {
+        val activeRoot = try { rootInActiveWindow } catch (_: Exception) { null }
+        val activeName = activeRoot?.packageName?.toString()
+        if (!activeName.isNullOrBlank() && !isIgnoredPackage(activeName)) return activeName
+
         val activeWindows = try { getWindows() } catch (_: Exception) { emptyList() }
         for (window in activeWindows) {
+            if (!window.isActive && !window.isFocused) continue
             val root = try { window.root } catch (_: Exception) { null } ?: continue
-            if (root.packageName?.toString() == packageName) continue
-            if (treeContainsGartic(root)) return root.packageName?.toString()
-        }
-        val root = try { rootInActiveWindow } catch (_: Exception) { null }
-        if (root != null && root.packageName?.toString() != packageName && treeContainsGartic(root)) {
-            return root.packageName?.toString()
+            val name = root.packageName?.toString()
+            if (!name.isNullOrBlank() && !isIgnoredPackage(name)) return name
         }
         return null
-    }
-
-    private fun treeContainsGartic(root: AccessibilityNodeInfo): Boolean {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var inspected = 0
-        while (queue.isNotEmpty() && inspected < 350) {
-            val node = queue.removeFirst()
-            inspected++
-            val text = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
-            if (text.contains("gartic phone", ignoreCase = true) ||
-                text.contains("garticphone.com", ignoreCase = true)
-            ) return true
-            for (i in 0 until node.childCount) {
-                val child = try { node.getChild(i) } catch (_: Exception) { null }
-                if (child != null) queue.add(child)
-            }
-        }
-        return false
     }
 
     private fun startDrawing() {
@@ -157,10 +181,10 @@ class DrawingAccessibilityService : AccessibilityService() {
             updateStatus("DEVA ya está dibujando")
             return
         }
-        val activePackage = findGarticPackage()
+        val activePackage = findForegroundPackage()
         if (activePackage == null) {
-            updateStatus("Abre Gartic Phone primero")
-            Toast.makeText(this, "No detecto Gartic Phone. Abre el lienzo antes de iniciar.", Toast.LENGTH_LONG).show()
+            updateStatus("Abre Gartic en el navegador")
+            Toast.makeText(this, "Abre Gartic Phone en el navegador, entra al lienzo y vuelve a pulsar Iniciar.", Toast.LENGTH_LONG).show()
             return
         }
         val strokes = DrawData.strokes
@@ -171,7 +195,8 @@ class DrawingAccessibilityService : AccessibilityService() {
         targetPackage = activePackage
         drawing = true
         nextStroke = 0
-        updateStatus("Dibujando… pulsa Detener")
+        updateStatus("Sesión activa · pulsa Detener")
+        Toast.makeText(this, "Sesión iniciada en la app actual. Asegúrate de estar en el lienzo de Gartic.", Toast.LENGTH_SHORT).show()
         dispatchNextBatch(strokes)
     }
 
@@ -188,8 +213,8 @@ class DrawingAccessibilityService : AccessibilityService() {
 
     private fun dispatchNextBatch(strokes: List<DrawStroke>) {
         if (!drawing) return
-        if (findGarticPackage() != targetPackage) {
-            stopDrawing("DEVA se detuvo porque Gartic Phone ya no está activo.")
+        if (findForegroundPackage() != targetPackage) {
+            stopDrawing("DEVA se detuvo porque cambiaste de aplicación.")
             return
         }
         if (nextStroke >= strokes.size) {
