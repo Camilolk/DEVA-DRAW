@@ -9,40 +9,89 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
+import java.util.ArrayDeque
 
 class DrawingAccessibilityService : AccessibilityService() {
     private var windowManager: WindowManager? = null
-    private var floatingButton: Button? = null
+    private var controlPanel: LinearLayout? = null
+    private var statusLabel: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
     private var nextStroke = 0
-    private var drawing = false
+    @Volatile private var drawing = false
+    private var targetPackage: String? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        showFloatingButton()
+        showControlPanel()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!drawing || event == null) return
+        if (event.packageName?.toString() == packageName) return
+
+        val detectedPackage = findGarticPackage()
+        val changedApp = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.packageName?.toString() != targetPackage
+        if (detectedPackage == null || changedApp) {
+            stopDrawing("DEVA se detuvo: saliste de Gartic Phone.")
+        }
+    }
 
     override fun onInterrupt() {
-        drawing = false
+        stopDrawing("Servicio interrumpido.")
     }
 
     override fun onDestroy() {
-        removeFloatingButton()
+        stopDrawing(null)
+        removeControlPanel()
         super.onDestroy()
     }
 
-    private fun showFloatingButton() {
-        if (floatingButton != null) return
+    private fun showControlPanel() {
+        if (controlPanel != null) return
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val button = Button(this).apply {
-            text = "DEVA ▶"
-            textSize = 12f
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(12, 8, 12, 8)
+            setBackgroundColor(0xEE18202E.toInt())
+        }
+        val title = TextView(this).apply {
+            text = "DEVA DRAW"
+            textSize = 13f
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = Gravity.CENTER
+        }
+        statusLabel = TextView(this).apply {
+            text = "Esperando Gartic Phone"
+            textSize = 10f
+            setTextColor(0xFFD5DCEC.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, 4, 0, 6)
+        }
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val start = Button(this).apply {
+            text = "Iniciar"
+            textSize = 11f
+            isAllCaps = false
             setOnClickListener { startDrawing() }
         }
+        val stop = Button(this).apply {
+            text = "Detener"
+            textSize = 11f
+            isAllCaps = false
+            setOnClickListener { stopDrawing("Dibujo detenido manualmente.") }
+        }
+        buttons.addView(start, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        buttons.addView(stop, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        panel.addView(title)
+        panel.addView(statusLabel)
+        panel.addView(buttons)
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -52,27 +101,66 @@ class DrawingAccessibilityService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.END
-            x = 18
-            y = 180
+            x = 12
+            y = 150
         }
         try {
-            windowManager?.addView(button, params)
-            floatingButton = button
+            windowManager?.addView(panel, params)
+            controlPanel = panel
         } catch (_: Exception) {
-            Toast.makeText(this, "No se pudo mostrar el botón flotante.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "No se pudo mostrar el control de DEVA.", Toast.LENGTH_LONG).show()
         }
     }
 
-    private fun removeFloatingButton() {
+    private fun removeControlPanel() {
         try {
-            floatingButton?.let { windowManager?.removeView(it) }
+            controlPanel?.let { windowManager?.removeView(it) }
         } catch (_: Exception) { }
-        floatingButton = null
+        controlPanel = null
+    }
+
+    private fun findGarticPackage(): String? {
+        val windows = try { windows } catch (_: Exception) { emptyList() }
+        for (window in windows) {
+            val root = try { window.root } catch (_: Exception) { null } ?: continue
+            if (root.packageName?.toString() == packageName) continue
+            if (treeContainsGartic(root)) return root.packageName?.toString()
+        }
+        val root = try { rootInActiveWindow } catch (_: Exception) { null }
+        if (root != null && root.packageName?.toString() != packageName && treeContainsGartic(root)) {
+            return root.packageName?.toString()
+        }
+        return null
+    }
+
+    private fun treeContainsGartic(root: AccessibilityNodeInfo): Boolean {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var inspected = 0
+        while (queue.isNotEmpty() && inspected < 350) {
+            val node = queue.removeFirst()
+            inspected++
+            val text = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
+            if (text.contains("gartic phone", ignoreCase = true) ||
+                text.contains("garticphone.com", ignoreCase = true)
+            ) return true
+            for (i in 0 until node.childCount) {
+                val child = try { node.getChild(i) } catch (_: Exception) { null }
+                if (child != null) queue.add(child)
+            }
+        }
+        return false
     }
 
     private fun startDrawing() {
         if (drawing) {
-            Toast.makeText(this, "DEVA ya está dibujando.", Toast.LENGTH_SHORT).show()
+            updateStatus("DEVA ya está dibujando")
+            return
+        }
+        val activePackage = findGarticPackage()
+        if (activePackage == null) {
+            updateStatus("Abre Gartic Phone primero")
+            Toast.makeText(this, "No detecto Gartic Phone. Abre el lienzo antes de iniciar.", Toast.LENGTH_LONG).show()
             return
         }
         val strokes = DrawData.strokes
@@ -80,16 +168,34 @@ class DrawingAccessibilityService : AccessibilityService() {
             Toast.makeText(this, "Primero prepara una imagen en DEVA DRAW.", Toast.LENGTH_LONG).show()
             return
         }
+        targetPackage = activePackage
         drawing = true
         nextStroke = 0
-        Toast.makeText(this, "DEVA comenzó a dibujar.", Toast.LENGTH_SHORT).show()
+        updateStatus("Dibujando… pulsa Detener")
         dispatchNextBatch(strokes)
+    }
+
+    private fun stopDrawing(message: String?) {
+        drawing = false
+        targetPackage = null
+        updateStatus("En pausa")
+        if (message != null) Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun updateStatus(message: String) {
+        handler.post { statusLabel?.text = message }
     }
 
     private fun dispatchNextBatch(strokes: List<DrawStroke>) {
         if (!drawing) return
+        if (findGarticPackage() != targetPackage) {
+            stopDrawing("DEVA se detuvo porque Gartic Phone ya no está activo.")
+            return
+        }
         if (nextStroke >= strokes.size) {
             drawing = false
+            targetPackage = null
+            updateStatus("Dibujo terminado")
             Toast.makeText(this, "Dibujo terminado.", Toast.LENGTH_LONG).show()
             return
         }
@@ -104,33 +210,40 @@ class DrawingAccessibilityService : AccessibilityService() {
 
         val builder = GestureDescription.Builder()
         var count = 0
-        while (nextStroke < strokes.size && count < 10) {
+        while (nextStroke < strokes.size && count < 3) {
             val stroke = strokes[nextStroke]
-            val path = Path().apply {
-                moveTo(left + stroke.x1 * (right - left), top + stroke.y1 * (bottom - top))
-                lineTo(left + stroke.x2 * (right - left), top + stroke.y2 * (bottom - top))
+            if (stroke.points.size >= 2) {
+                val path = Path()
+                val first = stroke.points.first()
+                path.moveTo(left + first.x * (right - left), top + first.y * (bottom - top))
+                stroke.points.drop(1).forEach { point ->
+                    path.lineTo(left + point.x * (right - left), top + point.y * (bottom - top))
+                }
+                builder.addStroke(GestureDescription.StrokeDescription(path, count * 70L, 65L))
+                count++
             }
-            builder.addStroke(
-                GestureDescription.StrokeDescription(path, count * 90L, 70L)
-            )
             nextStroke++
-            count++
+        }
+
+        if (count == 0) {
+            handler.post { dispatchNextBatch(strokes) }
+            return
         }
 
         val callback = object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                handler.post { dispatchNextBatch(strokes) }
+                handler.post {
+                    if (drawing) dispatchNextBatch(strokes)
+                }
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                drawing = false
-                Toast.makeText(this@DrawingAccessibilityService, "Dibujo interrumpido.", Toast.LENGTH_LONG).show()
+                stopDrawing("Dibujo interrumpido.")
             }
         }
 
         if (!dispatchGesture(builder.build(), callback, handler)) {
-            drawing = false
-            Toast.makeText(this, "Android no aceptó el gesto. Inténtalo otra vez.", Toast.LENGTH_LONG).show()
+            stopDrawing("Android rechazó el gesto. Inténtalo otra vez.")
         }
     }
 }
