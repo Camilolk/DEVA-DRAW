@@ -120,8 +120,8 @@ class DrawingAccessibilityService : AccessibilityService() {
     }
 
     private fun findGarticPackage(): String? {
-        val windows = try { windows } catch (_: Exception) { emptyList() }
-        for (window in windows) {
+        val activeWindows = try { getWindows() } catch (_: Exception) { emptyList() }
+        for (window in activeWindows) {
             val root = try { window.root } catch (_: Exception) { null } ?: continue
             if (root.packageName?.toString() == packageName) continue
             if (treeContainsGartic(root)) return root.packageName?.toString()
