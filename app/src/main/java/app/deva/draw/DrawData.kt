@@ -2,12 +2,9 @@ package app.deva.draw
 
 import android.graphics.Bitmap
 
-data class DrawStroke(
-    val x1: Float,
-    val y1: Float,
-    val x2: Float,
-    val y2: Float
-)
+data class DrawPoint(val x: Float, val y: Float)
+
+data class DrawStroke(val points: List<DrawPoint>)
 
 object DrawData {
     @Volatile var strokes: List<DrawStroke> = emptyList()
